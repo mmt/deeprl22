@@ -80,9 +80,6 @@ def main():
     f.create_dataset('observations', data=observations)
     f.create_dataset('actions', data=np.array(actions).squeeze())
     f.close()
-    #expert_data = {'observations': np.array(observations),
-    #               'actions': np.array(actions).squeeze()}
-
 
 
 if __name__ == '__main__':
