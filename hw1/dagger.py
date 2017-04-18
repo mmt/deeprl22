@@ -90,8 +90,12 @@ def main():
       train_inputs = tf.placeholder(tf.float32, shape=(None, no))
       train_outputs = tf.placeholder(tf.float32, shape=(None, nu))
 
+      A = tf.Variable(tf.truncated_normal([no, nu]))
+      b = tf.Variable(tf.truncated_normal([1, nu]))
+      linear_layer = tf.matmul(train_inputs, A) + b          
+      
       connection_widths = [no, 1000, nu]
-      apply_relu = [False, True]
+      apply_relu = [False, True, True]
       train_layer = train_inputs
       eval_layer = train_inputs
       for i in range(len(connection_widths) - 1):
@@ -109,11 +113,13 @@ def main():
           train_layer = tf.matmul(tf.nn.dropout(train_layer, 0.8), A) + b
           eval_layer = tf.matmul(eval_layer, A) + b          
 
+      train_layer += linear_layer
+      eval_layer += linear_layer
+
       loss = tf.nn.l2_loss(train_layer - train_outputs)
       eval_loss = tf.nn.l2_loss(eval_layer - train_outputs)      
       global_step = tf.Variable(0)  # Count the number of steps taken.
-      #learning_rate = tf.train.exponential_decay(0.5, global_step, 100, 0.95)
-      learning_rate = 0.001  # For hopper.
+      learning_rate = tf.placeholder(tf.float32)      
       optimizer = tf.train.AdamOptimizer(learning_rate).minimize(
           loss, global_step=global_step)
 
@@ -127,19 +133,21 @@ def main():
         batch_size = 1000
         progress = progressbar.ProgressBar()
         losses = []
+        
         for epoch in progress(range(num_epochs)):
           _loss = 0.0
-          N = train_observations.shape[0]
+          N = train_observations.shape[0]          
           sel = np.random.choice(range(N), batch_size)
           m = 5 * int(np.ceil((1.0 * N) / batch_size))
           for _ in range(m):
               feed_dict = {
+                  learning_rate: 0.05 if epoch < 200 else (0.001 if epoch > 1000 else 0.005),
                   train_inputs: train_observations[sel, :],
                   train_outputs: train_actions[sel, :],
               }
               _, _loss, _eval_loss, _eval_layer = session.run([optimizer, loss, eval_loss, eval_layer], feed_dict=feed_dict)
           if epoch % 100 == 99:
-              losses.append(_eval_loss)
+              losses.append(_eval_loss / len(sel))
               if len(losses) > 1:
                   pyplot.figure(22)
                   pyplot.cla()
@@ -152,7 +160,7 @@ def main():
                       train_outputs: validation_actions,
                   }
                   validation_loss, _eval_layer, = session.run([eval_loss, eval_layer], feed_dict=feed_dict)
-                  print 'validation loss: %f' % _eval_loss
+                  print 'validation loss: %f' % (_eval_loss / len(validation_observations))
 
           if epoch > 1000 and epoch % 100 == 99:
               def trained_policy_fn(obs):

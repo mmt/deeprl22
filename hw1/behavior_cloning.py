@@ -86,7 +86,11 @@ def main():
       train_inputs = tf.placeholder(tf.float32, shape=(None, no))
       train_outputs = tf.placeholder(tf.float32, shape=(None, nu))
 
-      connection_widths = [no, 100, nu]
+      A = tf.Variable(tf.truncated_normal([no, nu]))
+      b = tf.Variable(tf.truncated_normal([1, nu]))
+      linear_layer = tf.matmul(train_inputs, A) + b          
+
+      connection_widths = [no, 500, nu]
       apply_relu = [False, True, True, True]
       train_layer = train_inputs
       eval_layer = train_inputs
@@ -105,10 +109,12 @@ def main():
           train_layer = tf.matmul(tf.nn.dropout(train_layer, 0.8), A) + b
           eval_layer = tf.matmul(eval_layer, A) + b          
 
+      train_layer += linear_layer
+      eval_layer += linear_layer
       loss = tf.nn.l2_loss(train_layer - train_outputs)
       eval_loss = tf.nn.l2_loss(eval_layer - train_outputs)      
       global_step = tf.Variable(0)  # Count the number of steps taken.
-      learning_rate = tf.train.exponential_decay(0.5, global_step, 20, 0.995)
+      learning_rate = tf.train.exponential_decay(0.05, global_step, 100, 0.96)
       optimizer = tf.train.AdamOptimizer(learning_rate).minimize(
           loss, global_step=global_step)
 
