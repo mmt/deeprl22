@@ -80,6 +80,20 @@ def main():
     validation_actions = np.array(f['actions'])
     f.close()
 
+    N = train_observations.shape[0]
+    def whiten(D):
+        mean = np.mean(D, axis=0)
+        preprocess = D - mean
+        u, s, v = np.linalg.svd(preprocess)
+        scale = v.T.dot(np.diag(np.sqrt(N) / s))
+        unscale = np.diag(s / np.sqrt(N)).dot(v)
+        preprocess = preprocess.dot(scale)
+        return preprocess, mean, scale, unscale
+
+    input_preprocess, input_mean, input_scale, input_unscale = whiten(train_observations)
+    output_preprocess, output_mean, output_scale, output_unscale = whiten(train_actions)
+    
+
     tf.logging.set_verbosity(tf.logging.ERROR)
     
     no = len(train_observations[0])
@@ -94,7 +108,7 @@ def main():
       b = tf.Variable(tf.truncated_normal([1, nu]))
       linear_layer = tf.matmul(train_inputs, A) + b          
       
-      connection_widths = [no, 1000, nu]
+      connection_widths = [no, 1000, 1000, nu]
       apply_relu = [False, True, True]
       train_layer = train_inputs
       eval_layer = train_inputs
@@ -115,9 +129,9 @@ def main():
 
       train_layer += linear_layer
       eval_layer += linear_layer
-
-      loss = tf.nn.l2_loss(train_layer - train_outputs)
-      eval_loss = tf.nn.l2_loss(eval_layer - train_outputs)      
+      
+      loss = tf.nn.l2_loss(tf.matmul(train_layer - train_outputs, output_unscale))
+      eval_loss = tf.nn.l2_loss(tf.matmul(eval_layer - train_outputs, output_unscale))
       global_step = tf.Variable(0)  # Count the number of steps taken.
       learning_rate = tf.placeholder(tf.float32)      
       optimizer = tf.train.AdamOptimizer(learning_rate).minimize(
@@ -128,33 +142,21 @@ def main():
         policy_fn = load_policy.load_policy(args.expert_policy_file)
         
         tf.global_variables_initializer().run()
-        num_epochs = 5000
+        num_epochs = 2000
         batch_size = 1000
         progress = progressbar.ProgressBar()
         losses = []
         # Now we normalize the inputs and outputs.
 
-        N = train_observations.shape[0]
-        def whiten(D):
-            mean = np.mean(D, axis=0)
-            preprocess = D - mean
-            u, s, v = np.linalg.svd(preprocess)
-            scale = v.T.dot(np.diag(np.sqrt(N) / s))
-            unscale = np.diag(s / np.sqrt(N)).dot(v)
-            preprocess = preprocess.dot(scale)
-            return preprocess, mean, scale, unscale
-
-        input_preprocess, input_mean, input_scale, input_unscale = whiten(train_observations)
-        output_preprocess, output_mean, output_scale, output_unscale = whiten(train_actions)
-
         for epoch in progress(range(num_epochs)):
           _loss = 0.0
-          N = output_preprocess.shape[0]
+          N = output_preprocess.shape[0]          
+          batch_size = N / 10
           sel = np.random.choice(range(N), batch_size)
-          m = 5 * int(np.ceil((1.0 * N) / batch_size))
+          m = 10
           for _ in range(m):
               feed_dict = {
-                  learning_rate: 0.05 if epoch < 200 else (0.001 if epoch > 1000 else 0.005),
+                  learning_rate: 0.001, #0.05 if epoch < 200 else (0.001 if epoch > 1000 else 0.005),
                   train_inputs: input_preprocess[sel, :],
                   train_outputs: output_preprocess[sel, :],
               }
@@ -169,13 +171,14 @@ def main():
                   pyplot.pause(0.001)
                   print 'train loss: %f' % losses[-1]
                   feed_dict = {
-                      train_inputs: input_preprocess,
-                      train_outputs: output_preprocess,
+                      train_inputs: (validation_observations - input_mean).dot(input_scale),
+                      train_outputs: (validation_actions - output_mean).dot(output_scale),
                   }
                   validation_loss, _eval_layer, = session.run([eval_loss, eval_layer], feed_dict=feed_dict)
                   print 'validation loss: %f' % (_eval_loss / len(validation_observations))
 
-          if epoch > 1000 and epoch % 100 == 99:
+          #if epoch > 1000 and epoch % 100 == 99:
+          if epoch % 100 == 99:
               def trained_policy_fn(obs):
                   preprocess_obs = (obs - input_mean).dot(input_scale)
                   action = session.run([eval_layer], feed_dict={
