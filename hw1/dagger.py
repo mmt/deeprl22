@@ -124,7 +124,6 @@ def main():
           loss, global_step=global_step)
 
     pyplot.ion()
-    N = 1000
     with tf.Session(graph=graph) as session:
         policy_fn = load_policy.load_policy(args.expert_policy_file)
         
@@ -133,17 +132,31 @@ def main():
         batch_size = 1000
         progress = progressbar.ProgressBar()
         losses = []
-        
+        # Now we normalize the inputs and outputs.
+
+        N = train_observations.shape[0]
+        def whiten(D):
+            mean = np.mean(D, axis=0)
+            preprocess = D - mean
+            u, s, v = np.linalg.svd(preprocess)
+            scale = v.T.dot(np.diag(np.sqrt(N) / s))
+            unscale = np.diag(s / np.sqrt(N)).dot(v)
+            preprocess = preprocess.dot(scale)
+            return preprocess, mean, scale, unscale
+
+        input_preprocess, input_mean, input_scale, input_unscale = whiten(train_observations)
+        output_preprocess, output_mean, output_scale, output_unscale = whiten(train_actions)
+
         for epoch in progress(range(num_epochs)):
           _loss = 0.0
-          N = train_observations.shape[0]          
+          N = output_preprocess.shape[0]
           sel = np.random.choice(range(N), batch_size)
           m = 5 * int(np.ceil((1.0 * N) / batch_size))
           for _ in range(m):
               feed_dict = {
                   learning_rate: 0.05 if epoch < 200 else (0.001 if epoch > 1000 else 0.005),
-                  train_inputs: train_observations[sel, :],
-                  train_outputs: train_actions[sel, :],
+                  train_inputs: input_preprocess[sel, :],
+                  train_outputs: output_preprocess[sel, :],
               }
               _, _loss, _eval_loss, _eval_layer = session.run([optimizer, loss, eval_loss, eval_layer], feed_dict=feed_dict)
           if epoch % 100 == 99:
@@ -156,38 +169,40 @@ def main():
                   pyplot.pause(0.001)
                   print 'train loss: %f' % losses[-1]
                   feed_dict = {
-                      train_inputs: validation_observations,
-                      train_outputs: validation_actions,
+                      train_inputs: input_preprocess,
+                      train_outputs: output_preprocess,
                   }
                   validation_loss, _eval_layer, = session.run([eval_loss, eval_layer], feed_dict=feed_dict)
                   print 'validation loss: %f' % (_eval_loss / len(validation_observations))
 
           if epoch > 1000 and epoch % 100 == 99:
               def trained_policy_fn(obs):
+                  preprocess_obs = (obs - input_mean).dot(input_scale)
                   action = session.run([eval_layer], feed_dict={
-                      train_inputs: obs,
+                      train_inputs: preprocess_obs,
                       train_outputs: [[0.0 for _ in range(nu)]]
                   })
-                  return action
+                  return np.array(action).dot(output_unscale) + output_mean
 
               observations, _, returns = simulate(
                   args.envname, args.max_timesteps, 1, trained_policy_fn)
 
-              train_observations = np.vstack((
-                  train_observations, observations
+              input_preprocess = np.vstack((
+                  input_preprocess, (observations - input_mean).dot(input_scale)
               ))
 
               actions = np.array([policy_fn(obs.reshape((1, no))) for obs in observations]).squeeze()
-              train_actions = np.vstack((
-                  train_actions, actions
+              output_preprocess = np.vstack((
+                  output_preprocess, (actions - output_mean).dot(output_scale)
               ))
 
         def trained_policy_fn(obs):
+            preprocess_obs = (obs - input_mean).dot(input_scale)
             action = session.run([eval_layer], feed_dict={
-                train_inputs: obs,
+                train_inputs: preprocess_obs,
                 train_outputs: [[0.0 for _ in range(nu)]]
             })
-            return action
+            return np.array(action).dot(output_unscale) + output_mean
 
         observations, _, returns = simulate(
             args.envname, args.max_timesteps, args.num_rollouts, trained_policy_fn,
