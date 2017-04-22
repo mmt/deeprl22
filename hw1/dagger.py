@@ -10,9 +10,9 @@ Author of this script and included expert policies: Jonathan Ho (hoj@openai.com)
 """
 import os
 
+# Reduce TensorFlow logging.
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-import gym
 import h5py
 import load_policy
 from matplotlib import pyplot
@@ -20,41 +20,7 @@ import numpy as np
 import os
 import progressbar
 import tensorflow as tf
-import tf_util
-
-import pdb
-
-def simulate(envname, max_timesteps, num_rollouts, policy_fn, render=False):
-    with tf.Session():
-        tf_util.initialize()
-    
-        env = gym.make(envname)
-        max_steps = max_timesteps or env.spec.timestep_limit
-
-        returns = []
-        observations = []
-        actions = []
-        progress = progressbar.ProgressBar()
-        for i in progress(range(num_rollouts)):
-            obs = env.reset()
-            done = False
-            totalr = 0.
-            steps = 0
-            while not done:
-                action = policy_fn(obs[None,:])
-                observations.append(obs)
-                actions.append(action)
-                obs, r, done, _ = env.step(action)
-                totalr += r
-                steps += 1
-                if render:
-                    env.render()
-                if steps >= max_steps:
-                    break
-            returns.append(totalr)
-
-        return observations, actions, returns
-
+import tools
 
 def main():
     import argparse
@@ -69,6 +35,8 @@ def main():
                         help='Number of test rollouts.')
     args = parser.parse_args()
 
+    env = tools.Environment(args.envname)
+
     f = h5py.File(args.train_file, 'r')
     train_observations = np.array(f['observations'])
     train_actions = np.array(f['actions'])
@@ -80,115 +48,78 @@ def main():
     validation_actions = np.array(f['actions'])
     f.close()
 
-    N = train_observations.shape[0]
-    def whiten(D):
-        mean = np.mean(D, axis=0)
-        preprocess = D - mean
-        u, s, v = np.linalg.svd(preprocess)
-        scale = v.T.dot(np.diag(np.sqrt(N) / s))
-        unscale = np.diag(s / np.sqrt(N)).dot(v)
-        preprocess = preprocess.dot(scale)
-        return preprocess, mean, scale, unscale
+    # Remove the mean from both inputs and outputs, then use PCA to:
+    #
+    # 1) Reduce the dimensionality of the data based on a threshold on
+    #    the ration with the largest singular value.
+    #
+    # 2) Make input and output directions uncorrelated and unit variance.
+    #
+    no_r, input_preprocess, input_mean, input_scale, input_unscale = tools.whiten(train_observations)
+    nu_r, output_preprocess, output_mean, output_scale, output_unscale = tools.whiten(train_actions)
 
-    input_preprocess, input_mean, input_scale, input_unscale = whiten(train_observations)
-    output_preprocess, output_mean, output_scale, output_unscale = whiten(train_actions)
-    
+    no = len(train_observations[0])
+    nu = len(train_actions[0])
+    print '%d observations reduced to %d' % (no, no_r)
+    print '%d actions reduced to %d' % (nu, nu_r)
 
     tf.logging.set_verbosity(tf.logging.ERROR)
     
-    no = len(train_observations[0])
-    nu = len(train_actions[0])
     N = len(train_observations)
     graph = tf.Graph()
-    with graph.as_default():
-      train_inputs = tf.placeholder(tf.float32, shape=(None, no))
-      train_outputs = tf.placeholder(tf.float32, shape=(None, nu))
+    connection_widths = [no_r, 200, 200, nu_r]
+    apply_nl = [False, True, True]
 
-      A = tf.Variable(tf.truncated_normal([no, nu]))
-      b = tf.Variable(tf.truncated_normal([1, nu]))
-      linear_layer = tf.matmul(train_inputs, A) + b          
-      
-      connection_widths = [no, 1000, 1000, nu]
-      apply_relu = [False, True, True]
-      train_layer = train_inputs
-      eval_layer = train_inputs
-      for i in range(len(connection_widths) - 1):
-          A = tf.Variable(tf.truncated_normal([
-              connection_widths[i],
-              connection_widths[i + 1]
-          ], stddev=1.0))
-          b = tf.Variable(tf.truncated_normal([
-              1, connection_widths[i + 1],
-          ], stddev=1.0))
-
-          if apply_relu[i]:
-              train_layer = tf.nn.tanh(train_layer)
-              eval_layer = tf.nn.tanh(eval_layer)
-          train_layer = tf.matmul(tf.nn.dropout(train_layer, 0.8), A) + b
-          eval_layer = tf.matmul(eval_layer, A) + b          
-
-      train_layer += linear_layer
-      eval_layer += linear_layer
-      
-      loss = tf.nn.l2_loss(tf.matmul(train_layer - train_outputs, output_unscale))
-      eval_loss = tf.nn.l2_loss(tf.matmul(eval_layer - train_outputs, output_unscale))
-      global_step = tf.Variable(0)  # Count the number of steps taken.
-      learning_rate = tf.placeholder(tf.float32)      
-      optimizer = tf.train.AdamOptimizer(learning_rate).minimize(
-          loss, global_step=global_step)
+    (train_inputs, train_outputs, eval_layer, loss, eval_loss, learning_rate, optimizer
+     ) = tools.build_network(graph, connection_widths, apply_nl)
 
     pyplot.ion()
     with tf.Session(graph=graph) as session:
         policy_fn = load_policy.load_policy(args.expert_policy_file)
         
         tf.global_variables_initializer().run()
-        num_epochs = 2000
-        batch_size = 1000
+        num_epochs = 10000
         progress = progressbar.ProgressBar()
-        losses = []
+        losses = np.zeros((num_epochs,))
         # Now we normalize the inputs and outputs.
 
         for epoch in progress(range(num_epochs)):
           _loss = 0.0
-          N = output_preprocess.shape[0]          
-          batch_size = N / 10
+          N = output_preprocess.shape[0]
+          m = 10 # int(np.max((10, N / 1e4)))
+          batch_size = 1000
           sel = np.random.choice(range(N), batch_size)
-          m = 10
           for _ in range(m):
               feed_dict = {
-                  learning_rate: 0.001, #0.05 if epoch < 200 else (0.001 if epoch > 1000 else 0.005),
+                  learning_rate: 0.001,
+                  #learning_rate: 0.05 if epoch < 200 else (0.001 if epoch > 1000 else 0.005),
                   train_inputs: input_preprocess[sel, :],
                   train_outputs: output_preprocess[sel, :],
               }
               _, _loss, _eval_loss, _eval_layer = session.run([optimizer, loss, eval_loss, eval_layer], feed_dict=feed_dict)
-          if epoch % 100 == 99:
-              losses.append(_eval_loss / len(sel))
-              if len(losses) > 1:
-                  pyplot.figure(22)
-                  pyplot.cla()
-                  pyplot.semilogy(losses)
-                  pyplot.show()
-                  pyplot.pause(0.001)
-                  print 'train loss: %f' % losses[-1]
-                  feed_dict = {
-                      train_inputs: (validation_observations - input_mean).dot(input_scale),
-                      train_outputs: (validation_actions - output_mean).dot(output_scale),
-                  }
-                  validation_loss, _eval_layer, = session.run([eval_loss, eval_layer], feed_dict=feed_dict)
-                  print 'validation loss: %f' % (_eval_loss / len(validation_observations))
+          losses[epoch] = _eval_loss / len(sel)
+          if epoch > 0 and epoch % 500 == 499:
+              pyplot.figure(22)
+              pyplot.cla()
+              pyplot.semilogy(losses)
+              pyplot.xlim([0, epoch + 1])
+              pyplot.show()
+              pyplot.pause(0.001)
+              feed_dict = {
+                  train_inputs: (validation_observations - input_mean).dot(input_scale),
+                  train_outputs: (validation_actions - output_mean).dot(output_scale),
+              }
+              validation_loss, = session.run([eval_loss], feed_dict=feed_dict)
+              print 'train loss: %f' % losses[epoch]
+              print 'validation loss: %f' % (validation_loss / len(validation_observations))
 
+          if epoch % 100 == 99:
           #if epoch > 1000 and epoch % 100 == 99:
-          if epoch % 100 == 99:
-              def trained_policy_fn(obs):
-                  preprocess_obs = (obs - input_mean).dot(input_scale)
-                  action = session.run([eval_layer], feed_dict={
-                      train_inputs: preprocess_obs,
-                      train_outputs: [[0.0 for _ in range(nu)]]
-                  })
-                  return np.array(action).dot(output_unscale) + output_mean
-
-              observations, _, returns = simulate(
-                  args.envname, args.max_timesteps, 1, trained_policy_fn)
+              policy_fn = tools.get_policy(session, eval_layer,
+                                           input_mean, input_scale,
+                                           output_mean, output_unscale)
+              observations, _, returns = env.simulate(
+                  args.max_timesteps, 1, policy_fn)
 
               input_preprocess = np.vstack((
                   input_preprocess, (observations - input_mean).dot(input_scale)
@@ -198,18 +129,12 @@ def main():
               output_preprocess = np.vstack((
                   output_preprocess, (actions - output_mean).dot(output_scale)
               ))
+        policy_fn = tools.get_policy(session, eval_layer,
+                                     input_mean, input_scale,
+                                     output_mean, output_unscale)
 
-        def trained_policy_fn(obs):
-            preprocess_obs = (obs - input_mean).dot(input_scale)
-            action = session.run([eval_layer], feed_dict={
-                train_inputs: preprocess_obs,
-                train_outputs: [[0.0 for _ in range(nu)]]
-            })
-            return np.array(action).dot(output_unscale) + output_mean
-
-        observations, _, returns = simulate(
-            args.envname, args.max_timesteps, args.num_rollouts, trained_policy_fn,
-            render=True)
+        observations, _, returns = env.simulate(
+            args.max_timesteps, args.num_rollouts, trained_policy_fn, render=True)
               
         #print('expert returns', train_returns)
         print('expert mean return', np.mean(train_returns))
