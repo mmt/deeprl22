@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--max_timesteps", type=int)    
     parser.add_argument('--num_rollouts', type=int, default=20,
                         help='Number of test rollouts.')
+    parser.add_argument('--render', action='store_true')    
     args = parser.parse_args()
 
     env = tools.Environment(args.envname)
@@ -48,93 +49,63 @@ def main():
     validation_actions = np.array(f['actions'])
     f.close()
 
-    # Remove the mean from both inputs and outputs, then use PCA to:
-    #
-    # 1) Reduce the dimensionality of the data based on a threshold on
-    #    the ration with the largest singular value.
-    #
-    # 2) Make input and output directions uncorrelated and unit variance.
-    #
-    no_r, input_preprocess, input_mean, input_scale, input_unscale = tools.whiten(train_observations)
-    nu_r, output_preprocess, output_mean, output_scale, output_unscale = tools.whiten(train_actions)
-
-    no = len(train_observations[0])
-    nu = len(train_actions[0])
-    print '%d observations reduced to %d' % (no, no_r)
-    print '%d actions reduced to %d' % (nu, nu_r)
-
     tf.logging.set_verbosity(tf.logging.ERROR)
     
-    N = len(train_observations)
     graph = tf.Graph()
-    connection_widths = [no_r, 200, 200, nu_r]
-    apply_nl = [False, True, True]
-
-    (train_inputs, train_outputs, eval_layer, loss, eval_loss, learning_rate, optimizer
-     ) = tools.build_network(graph, connection_widths, apply_nl)
+    hidden_layer_widths = [500]
+    train_policy = tools.TrainPolicy(graph, hidden_layer_widths, train_observations, train_actions)
 
     pyplot.ion()
     with tf.Session(graph=graph) as session:
         policy_fn = load_policy.load_policy(args.expert_policy_file)
         
         tf.global_variables_initializer().run()
-        num_epochs = 10000
+        num_epochs = 25000
         progress = progressbar.ProgressBar()
         losses = np.zeros((num_epochs,))
         # Now we normalize the inputs and outputs.
 
         for epoch in progress(range(num_epochs)):
           _loss = 0.0
-          N = output_preprocess.shape[0]
-          m = 10 # int(np.max((10, N / 1e4)))
-          batch_size = 1000
+          N = train_observations.shape[0]
+          m = 1 # int(np.max((10, N / 1e4)))
+          batch_size = 2000
           sel = np.random.choice(range(N), batch_size)
           for _ in range(m):
-              feed_dict = {
-                  learning_rate: 0.001,
-                  #learning_rate: 0.05 if epoch < 200 else (0.001 if epoch > 1000 else 0.005),
-                  train_inputs: input_preprocess[sel, :],
-                  train_outputs: output_preprocess[sel, :],
-              }
-              _, _loss, _eval_loss, _eval_layer = session.run([optimizer, loss, eval_loss, eval_layer], feed_dict=feed_dict)
-          losses[epoch] = _eval_loss / len(sel)
-          if epoch > 0 and epoch % 500 == 499:
+              loss = train_policy.run(
+                  session, 0.001,
+                  train_observations[sel, :],
+                  train_actions[sel, :],
+                  optimize=True)
+
+          losses[epoch] = loss
+          if epoch > 0 and epoch % 5000 == 4999:
               pyplot.figure(22)
               pyplot.cla()
               pyplot.semilogy(losses)
               pyplot.xlim([0, epoch + 1])
               pyplot.show()
               pyplot.pause(0.001)
-              feed_dict = {
-                  train_inputs: (validation_observations - input_mean).dot(input_scale),
-                  train_outputs: (validation_actions - output_mean).dot(output_scale),
-              }
-              validation_loss, = session.run([eval_loss], feed_dict=feed_dict)
+              validation_loss = train_policy.run(
+                  session, 0.001,
+                  validation_observations, validation_actions)
               print 'train loss: %f' % losses[epoch]
-              print 'validation loss: %f' % (validation_loss / len(validation_observations))
+              print 'validation loss: %f' % validation_loss
 
-          if epoch % 100 == 99:
-          #if epoch > 1000 and epoch % 100 == 99:
-              policy_fn = tools.get_policy(session, eval_layer,
-                                           input_mean, input_scale,
-                                           output_mean, output_unscale)
+          if epoch % 500 == 499:
               observations, _, returns = env.simulate(
-                  args.max_timesteps, 1, policy_fn)
+                  args.max_timesteps, 1, train_policy.get_policy(session))
 
-              input_preprocess = np.vstack((
-                  input_preprocess, (observations - input_mean).dot(input_scale)
+              train_observations = np.vstack((
+                  train_observations, observations
               ))
-
+              no = train_observations.shape[1]
               actions = np.array([policy_fn(obs.reshape((1, no))) for obs in observations]).squeeze()
-              output_preprocess = np.vstack((
-                  output_preprocess, (actions - output_mean).dot(output_scale)
+              train_actions = np.vstack((
+                  train_actions, actions
               ))
-        policy_fn = tools.get_policy(session, eval_layer,
-                                     input_mean, input_scale,
-                                     output_mean, output_unscale)
-
         observations, _, returns = env.simulate(
-            args.max_timesteps, args.num_rollouts, trained_policy_fn, render=True)
+            args.max_timesteps, args.num_rollouts, train_policy.get_policy(session), render=args.render)
               
         #print('expert returns', train_returns)
         print('expert mean return', np.mean(train_returns))

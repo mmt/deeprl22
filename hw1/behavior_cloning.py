@@ -26,12 +26,13 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('envname', type=str)
-    parser.add_argument("--validation_file", type=str, default=None)
-    parser.add_argument("--train_file", type=str, default=None)
-    parser.add_argument("--output_file", type=str, default=None)    
-    parser.add_argument("--max_timesteps", type=int)    
+    parser.add_argument("--max_timesteps", type=int)
     parser.add_argument('--num_rollouts', type=int, default=20,
                         help='Number of test rollouts.')
+    parser.add_argument("--output_file", type=str, default=None)    
+    parser.add_argument('--render', action='store_true')
+    parser.add_argument("--train_file", type=str, default=None)
+    parser.add_argument("--validation_file", type=str, default=None)
     args = parser.parse_args()
 
     env = tools.Environment(args.envname)
@@ -51,58 +52,43 @@ def main():
 
     tf.logging.set_verbosity(tf.logging.ERROR)
 
-    no_r, input_preprocess, input_mean, input_scale, input_unscale = tools.whiten(train_observations)
-    nu_r, output_preprocess, output_mean, output_scale, output_unscale = tools.whiten(train_actions)
-    no = len(train_observations[0])
-    nu = len(train_actions[0])
-    print '%d observations reduced to %d' % (no, no_r)
-    print '%d actions reduced to %d' % (nu, nu_r)
-
     graph = tf.Graph()
-    connection_widths = [no_r, 500, nu_r]
-    apply_nl = [False, True]
-    (train_inputs, train_outputs, eval_layer, loss, eval_loss, learning_rate, optimizer
-     ) = tools.build_network(graph, connection_widths, apply_nl)
-    
+    hidden_layer_widths = [500]
+    train_policy = tools.TrainPolicy(graph, hidden_layer_widths, train_observations, train_actions)
+
     pyplot.ion()
     with tf.Session(graph=graph) as session:
         tf.global_variables_initializer().run()
-        num_epochs = 5000
+        num_epochs = 2000
         batch_size = 1000
         m = N / batch_size
+        losses = np.zeros((m * num_epochs,))
         progress = progressbar.ProgressBar()
-        losses = []
         for epoch in progress(range(num_epochs)):
           _loss = 0.0
           for i in range(m):
-            feed_dict = {
-                learning_rate: 0.005,
-                train_inputs: input_preprocess[batch_size * i:batch_size * (i+1)],
-                train_outputs: output_preprocess[batch_size * i:batch_size * (i+1)]
-            }
-            _, _loss, _eval_loss, _eval_layer = session.run([optimizer, loss, eval_loss, eval_layer], feed_dict=feed_dict)
-          if epoch % 100 == 99:
-              losses.append(_eval_loss / batch_size)
-              if len(losses) > 1:
-                pyplot.figure(22)
-                pyplot.cla()
-                pyplot.semilogy(losses)
-                pyplot.show()
-                pyplot.pause(0.001)
-        print 'train loss: %f' % losses[-1]
-        feed_dict = {
-            train_inputs: (validation_observations - input_mean).dot(input_scale),
-            train_outputs: (validation_actions - output_mean).dot(output_scale),
-        }
-        validation_loss, _eval_layer, = session.run([eval_loss, eval_layer], feed_dict=feed_dict)
-        print 'validation loss: %f' % (_eval_loss / len(validation_observations.shape))
+              loss = train_policy.run(
+                  session, 0.001,
+                  train_observations[batch_size * i:batch_size * (i+1)],
+                  train_actions[batch_size * i:batch_size * (i+1)],
+                  optimize=True)
+              losses[epoch * m + i] = loss
 
-        policy_fn = tools.get_policy(session, train_inputs, train_outputs, eval_layer,
-                                     input_mean, input_scale,
-                                     output_mean, output_unscale)
+          if epoch % 100 == 99:
+              pyplot.figure(22)
+              pyplot.cla()
+              pyplot.semilogy(losses[:(epoch + 1) * m - 1])
+              pyplot.show()
+              pyplot.pause(0.001)
+        print 'train loss: %f' % losses[(epoch + 1) * m - 1]
+        validation_loss = train_policy.run(
+            session, 0.001,
+            validation_observations, validation_actions)
+        print 'validation loss: %f' % validation_loss
 
         _, _, returns = env.simulate(
-            args.max_timesteps, args.num_rollouts, policy_fn)
+            args.max_timesteps, args.num_rollouts, train_policy.get_policy(session),
+            render=args.render)
 
         #print('expert returns', train_returns)
         print('expert mean return', np.mean(train_returns))
