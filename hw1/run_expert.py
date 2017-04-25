@@ -30,7 +30,7 @@ def main():
     parser.add_argument('--output_file', type=str, default=None,
                         help='Filename to output to.')
     parser.add_argument('--render', action='store_true')
-    
+
     args = parser.parse_args()
 
     tf.logging.set_verbosity(tf.logging.ERROR)

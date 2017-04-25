@@ -65,19 +65,21 @@ class TrainPolicy():
         with graph.as_default():
             self._train_inputs = tf.placeholder(tf.float32, shape=(None, self._no))
             self._train_outputs = tf.placeholder(tf.float32, shape=(None, self._nu))
+            
+            A_linear = tf.Variable(tf.zeros([self._no, self._nu]))
+            b_linear = tf.Variable(tf.zeros([1, self._nu]))
+            linear_layer = tf.matmul(self._train_inputs, A_linear) + b_linear
 
-            A = tf.Variable(tf.zeros([self._no, self._nu]))
-            b = tf.Variable(tf.zeros([1, self._nu]))
-            linear_layer = tf.matmul(self._train_inputs, A) + b
-
+            As = [None for _ in range(len(connection_widths) - 1)]
+            bs = [None for _ in range(len(connection_widths) - 1)]
             train_layer = self._train_inputs
             self._eval_layer = self._train_inputs
             for i in range(len(connection_widths) - 1):
-                A = tf.Variable(tf.truncated_normal([
+                As[i] = tf.Variable(tf.truncated_normal([
                     connection_widths[i],
                     connection_widths[i + 1]
                 ],  stddev=connection_widths[i]**-0.5))
-                b = tf.Variable(tf.truncated_normal([
+                bs[i] = tf.Variable(tf.truncated_normal([
                     1, connection_widths[i + 1],
                 ], stddev=connection_widths[i]**-0.5))
 
@@ -85,8 +87,8 @@ class TrainPolicy():
                     train_layer = 1.7159 * tf.nn.tanh((2.0 / 3.0) * train_layer)
                     self._eval_layer = 1.7159 * tf.nn.tanh((2.0 / 3.0) * self._eval_layer)
 
-                train_layer = tf.matmul(tf.nn.dropout(train_layer, 0.8), A) + b
-                self._eval_layer = tf.matmul(self._eval_layer, A) + b          
+                train_layer = tf.matmul(tf.nn.dropout(train_layer, 0.8), As[i]) + bs[i]
+                self._eval_layer = tf.matmul(self._eval_layer, As[i]) + bs[i]
 
             train_layer += linear_layer
             self._eval_layer += linear_layer
@@ -96,6 +98,7 @@ class TrainPolicy():
                 self._eval_layer - self._train_outputs, self._output_unscale))
             self._learning_rate = tf.placeholder(tf.float32)            
             self._optimizer = tf.train.AdamOptimizer(self._learning_rate).minimize(self._loss)
+            self.variables = [A_linear, b_linear] + As + bs
 
     def run(self, session, learning_rate, inputs, outputs, optimize=False):
         feed_dict = {

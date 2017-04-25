@@ -21,6 +21,36 @@ import progressbar
 import tensorflow as tf
 import tools
 
+def train(train_observations, train_actions, 
+          validation_observations, validation_actions,
+          train_policy, session):
+    N = train_observations.shape[0]
+    num_epochs = 2000
+    batch_size = 1000
+    m = N / batch_size
+    losses = np.zeros((num_epochs,))
+    progress = progressbar.ProgressBar()
+    for epoch in progress(range(num_epochs)):
+        loss = 0.0
+        for i in range(m):
+            loss += train_policy.run(
+                session, 0.001,
+                train_observations[batch_size * i:batch_size * (i+1)],
+                train_actions[batch_size * i:batch_size * (i+1)],
+                optimize=True)
+        losses[epoch] = loss / m
+
+        if epoch % 100 == 99:
+            pyplot.figure(22)
+            pyplot.cla()
+            pyplot.semilogy(losses[:epoch + 1])
+            pyplot.show()
+            pyplot.pause(0.001)
+            print 'train loss: %f' % losses[epoch]
+            validation_loss = train_policy.run(
+                session, 0.001,
+                validation_observations, validation_actions)
+            print 'validation loss: %f' % validation_loss
 
 def main():
     import argparse
@@ -33,6 +63,8 @@ def main():
     parser.add_argument('--render', action='store_true')
     parser.add_argument("--train_file", type=str, default=None)
     parser.add_argument("--validation_file", type=str, default=None)
+    parser.add_argument("--load_session_file", type=str, default=None)
+    parser.add_argument("--save_name", type=str, default=None)
     args = parser.parse_args()
 
     env = tools.Environment(args.envname)
@@ -48,8 +80,6 @@ def main():
     validation_actions = np.array(f['actions'])
     f.close()
 
-    N = train_observations.shape[0]
-
     tf.logging.set_verbosity(tf.logging.ERROR)
 
     graph = tf.Graph()
@@ -57,52 +87,31 @@ def main():
     train_policy = tools.TrainPolicy(graph, hidden_layer_widths, train_observations, train_actions)
 
     pyplot.ion()
+    
     with tf.Session(graph=graph) as session:
         tf.global_variables_initializer().run()
-        num_epochs = 2000
-        batch_size = 1000
-        m = N / batch_size
-        losses = np.zeros((m * num_epochs,))
-        progress = progressbar.ProgressBar()
-        for epoch in progress(range(num_epochs)):
-          _loss = 0.0
-          for i in range(m):
-              loss = train_policy.run(
-                  session, 0.001,
-                  train_observations[batch_size * i:batch_size * (i+1)],
-                  train_actions[batch_size * i:batch_size * (i+1)],
-                  optimize=True)
-              losses[epoch * m + i] = loss
 
-          if epoch % 100 == 99:
-              pyplot.figure(22)
-              pyplot.cla()
-              pyplot.semilogy(losses[:(epoch + 1) * m - 1])
-              pyplot.show()
-              pyplot.pause(0.001)
-        print 'train loss: %f' % losses[(epoch + 1) * m - 1]
-        validation_loss = train_policy.run(
-            session, 0.001,
-            validation_observations, validation_actions)
-        print 'validation loss: %f' % validation_loss
+        if args.load_session_file:
+            saver = tf.train.Saver()
+            saver.restore(session, args.load_session_file)
+        else:
+            saver = tf.train.Saver()            
+            train(train_observations, train_actions,
+                  validation_observations, validation_actions,
+                  train_policy, session)
+            if args.save_name:
+                saver.save(session, args.save_name, global_step=0)
+            
 
         _, _, returns = env.simulate(
             args.max_timesteps, args.num_rollouts, train_policy.get_policy(session),
             render=args.render)
 
-        #print('expert returns', train_returns)
         print('expert mean return', np.mean(train_returns))
         print('expert std of return', np.std(train_returns))
         
-        #print('returns', returns)
         print('mean return', np.mean(returns))
         print('std of return', np.std(returns))
-
-        f=h5py.File(args.output_file, 'w')
-        f.create_dataset('losses', data=losses)
-        f.create_dataset('returns', data=returns)
-        f.close()
-        
 
 if __name__ == '__main__':
     main()
