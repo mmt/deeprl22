@@ -32,18 +32,19 @@ def train(train_observations, train_actions,
 
     saver = tf.train.Saver()
     for epoch in progress(range(num_epochs)):
-        _loss = 0.0
+
         N = train_observations.shape[0]
         m = 1 # int(np.max((10, N / 1e4)))
         batch_size = 2000
         sel = np.random.choice(range(N), batch_size)
         loss = 0.0
         for _ in range(m):
-            loss += train_policy.run(
+            loss_i, _ = train_policy.run(
                 session, 0.001,
                 train_observations[sel, :],
                 train_actions[sel, :],
                 optimize=True)
+            loss += loss_i
 
         losses[epoch] = loss / m
         if save_name:
@@ -58,7 +59,7 @@ def train(train_observations, train_actions,
             pyplot.xlim([0, epoch + 1])
             pyplot.show()
             pyplot.pause(0.001)
-            validation_loss = train_policy.run(
+            validation_loss, _ = train_policy.run(
                 session, 0.001,
                 validation_observations, validation_actions)
             print 'train loss: %f' % losses[epoch]
@@ -130,11 +131,9 @@ def main():
         observations, _, returns = env.simulate(
             args.max_timesteps, args.num_rollouts, train_policy.get_policy(session), render=args.render)
               
-        #print('expert returns', train_returns)
         print('expert mean return', np.mean(train_returns))
         print('expert std of return', np.std(train_returns))
         
-        #print('returns', returns)
         print('mean return', np.mean(returns))
         print('std of return', np.std(returns))
 
