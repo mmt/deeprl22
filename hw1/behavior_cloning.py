@@ -24,21 +24,24 @@ import tools
 def train(train_observations, train_actions, 
           validation_observations, validation_actions,
           train_policy, session):
+    writer = tf.summary.FileWriter('/tmp/tensorboard', graph=tf.get_default_graph())    
     N = train_observations.shape[0]
     num_epochs = 2000
-    batch_size = 1000
+    batch_size = np.min((1000, N))
     m = N / batch_size
     losses = np.zeros((num_epochs,))
     progress = progressbar.ProgressBar()
     for epoch in progress(range(num_epochs)):
         loss = 0.0
         for i in range(m):
-            loss += train_policy.run(
+            loss_i, summary = train_policy.run(
                 session, 0.001,
                 train_observations[batch_size * i:batch_size * (i+1)],
                 train_actions[batch_size * i:batch_size * (i+1)],
                 optimize=True)
+            loss += loss_i
         losses[epoch] = loss / m
+        writer.add_summary(summary, epoch)
 
         if epoch % 100 == 99:
             pyplot.figure(22)
@@ -47,7 +50,7 @@ def train(train_observations, train_actions,
             pyplot.show()
             pyplot.pause(0.001)
             print 'train loss: %f' % losses[epoch]
-            validation_loss = train_policy.run(
+            validation_loss, _ = train_policy.run(
                 session, 0.001,
                 validation_observations, validation_actions)
             print 'validation loss: %f' % validation_loss

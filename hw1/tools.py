@@ -96,6 +96,8 @@ class TrainPolicy():
                 train_layer - self._train_outputs, self._output_unscale))
             self._eval_loss = tf.nn.l2_loss(tf.matmul(
                 self._eval_layer - self._train_outputs, self._output_unscale))
+            tf.summary.scalar("loss", self._eval_loss)
+            self._summary_op = tf.summary.merge_all()
             self._learning_rate = tf.placeholder(tf.float32)            
             self._optimizer = tf.train.AdamOptimizer(self._learning_rate).minimize(self._loss)
             self.variables = [A_linear, b_linear] + As + bs
@@ -107,10 +109,11 @@ class TrainPolicy():
             self._train_outputs: (outputs - self._output_mean).dot(self._output_scale),
         }
         if optimize:
-            _, loss = session.run([self._optimizer, self._eval_loss], feed_dict=feed_dict)
+            _, loss, summary = session.run([self._optimizer, self._eval_loss, self._summary_op],
+                                           feed_dict=feed_dict)
         else:
-            loss, = session.run([self._eval_loss], feed_dict=feed_dict)
-        return loss / inputs.shape[0]
+            loss, summary = session.run([self._eval_loss, self._summary_op], feed_dict=feed_dict)
+        return loss / inputs.shape[0], summary
 
     def get_policy(self, session):
         def trained_policy_fn(obs):

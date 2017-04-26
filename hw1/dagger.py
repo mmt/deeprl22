@@ -22,6 +22,62 @@ import progressbar
 import tensorflow as tf
 import tools
 
+def train(train_observations, train_actions,
+          validation_observations, validation_actions,
+          train_policy, session, policy_fn, env, max_timesteps, save_name=None):
+    num_epochs = 25000
+    progress = progressbar.ProgressBar()
+    losses = np.zeros((num_epochs,))
+    # Now we normalize the inputs and outputs.
+
+    saver = tf.train.Saver()
+    for epoch in progress(range(num_epochs)):
+        _loss = 0.0
+        N = train_observations.shape[0]
+        m = 1 # int(np.max((10, N / 1e4)))
+        batch_size = 2000
+        sel = np.random.choice(range(N), batch_size)
+        loss = 0.0
+        for _ in range(m):
+            loss += train_policy.run(
+                session, 0.001,
+                train_observations[sel, :],
+                train_actions[sel, :],
+                optimize=True)
+
+        losses[epoch] = loss / m
+        if save_name:
+            saver.save(session, save_name, global_step=0)
+        
+        if epoch > 0 and epoch % 1000 == 999:
+            if save_name:
+                saver.save(session, save_name, global_step=epoch)
+            pyplot.figure(22)
+            pyplot.cla()
+            pyplot.semilogy(losses)
+            pyplot.xlim([0, epoch + 1])
+            pyplot.show()
+            pyplot.pause(0.001)
+            validation_loss = train_policy.run(
+                session, 0.001,
+                validation_observations, validation_actions)
+            print 'train loss: %f' % losses[epoch]
+            print 'validation loss: %f' % validation_loss
+
+        if epoch % 500 == 499:
+            observations, _, returns = env.simulate(
+                max_timesteps, 1, train_policy.get_policy(session))
+            
+            train_observations = np.vstack((
+                train_observations, observations
+            ))
+            no = train_observations.shape[1]
+            actions = np.array([policy_fn(obs.reshape((1, no))) for obs in observations]).squeeze()
+            train_actions = np.vstack((
+                train_actions, actions
+            ))
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -33,7 +89,9 @@ def main():
     parser.add_argument("--max_timesteps", type=int)    
     parser.add_argument('--num_rollouts', type=int, default=20,
                         help='Number of test rollouts.')
-    parser.add_argument('--render', action='store_true')    
+    parser.add_argument('--render', action='store_true')
+    parser.add_argument("--load_session_file", type=str, default=None)
+    parser.add_argument("--save_name", type=str, default=None)
     args = parser.parse_args()
 
     env = tools.Environment(args.envname)
@@ -58,52 +116,17 @@ def main():
     pyplot.ion()
     with tf.Session(graph=graph) as session:
         policy_fn = load_policy.load_policy(args.expert_policy_file)
-        
         tf.global_variables_initializer().run()
-        num_epochs = 25000
-        progress = progressbar.ProgressBar()
-        losses = np.zeros((num_epochs,))
-        # Now we normalize the inputs and outputs.
 
-        for epoch in progress(range(num_epochs)):
-          _loss = 0.0
-          N = train_observations.shape[0]
-          m = 1 # int(np.max((10, N / 1e4)))
-          batch_size = 2000
-          sel = np.random.choice(range(N), batch_size)
-          for _ in range(m):
-              loss = train_policy.run(
-                  session, 0.001,
-                  train_observations[sel, :],
-                  train_actions[sel, :],
-                  optimize=True)
-
-          losses[epoch] = loss
-          if epoch > 0 and epoch % 5000 == 4999:
-              pyplot.figure(22)
-              pyplot.cla()
-              pyplot.semilogy(losses)
-              pyplot.xlim([0, epoch + 1])
-              pyplot.show()
-              pyplot.pause(0.001)
-              validation_loss = train_policy.run(
-                  session, 0.001,
-                  validation_observations, validation_actions)
-              print 'train loss: %f' % losses[epoch]
-              print 'validation loss: %f' % validation_loss
-
-          if epoch % 500 == 499:
-              observations, _, returns = env.simulate(
-                  args.max_timesteps, 1, train_policy.get_policy(session))
-
-              train_observations = np.vstack((
-                  train_observations, observations
-              ))
-              no = train_observations.shape[1]
-              actions = np.array([policy_fn(obs.reshape((1, no))) for obs in observations]).squeeze()
-              train_actions = np.vstack((
-                  train_actions, actions
-              ))
+        if args.load_session_file:
+            saver = tf.train.Saver()
+            saver.restore(session, args.load_session_file)
+        else:
+            train(train_observations, train_actions,
+                  validation_observations, validation_actions,
+                  train_policy, session, policy_fn, env, args.max_timesteps,
+                  save_name=args.save_name)
+        
         observations, _, returns = env.simulate(
             args.max_timesteps, args.num_rollouts, train_policy.get_policy(session), render=args.render)
               
@@ -115,11 +138,6 @@ def main():
         print('mean return', np.mean(returns))
         print('std of return', np.std(returns))
 
-        f=h5py.File(args.output_file, 'w')
-        f.create_dataset('losses', data=losses)
-        f.create_dataset('returns', data=returns)
-        f.close()
-        
 
 if __name__ == '__main__':
     main()
