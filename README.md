@@ -19,6 +19,7 @@ watching the lectures and working on the problem sets.
 
 ## Blog Posts etc.
 
+- A [post](http://karpathy.github.io/2015/05/21/rnn-effectiveness/) describing RNNs.
 - A [post](http://colah.github.io/posts/2015-08-Understanding-LSTMs/) explaining LSTMs.
 
 ## Software
