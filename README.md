@@ -17,6 +17,9 @@ watching the lectures and working on the problem sets.
 - Yann Lecun's [paper](http://yann.lecun.com/exdb/publis/pdf/lecun-98b.pdf) discusses
   tricks for normalization and initialization.
 
+## Blog Posts etc.
+
+- A [post](http://colah.github.io/posts/2015-08-Understanding-LSTMs/) explaining LSTMs.
 
 ## Software
 
