@@ -21,6 +21,8 @@ watching the lectures and working on the problem sets.
 
 - A [post](http://karpathy.github.io/2015/05/21/rnn-effectiveness/) describing RNNs.
 - A [post](http://colah.github.io/posts/2015-08-Understanding-LSTMs/) explaining LSTMs.
+- A pair of posts on [seq2seq](https://indico.io/blog/sequence-modeling-neuralnets-part1/)
+  and [attention](https://indico.io/blog/sequence-modeling-neuralnets-part1/).
 
 ## Software
 
