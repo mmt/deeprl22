@@ -41,3 +41,6 @@ watching the lectures and working on the problem sets.
 ### Other
 
 - [Pudb](https://pypi.python.org/pypi/pudb) seems like a useful debug tool.
+
+## Other courses
+- [Stanford CS class CS231n: Convolutional Neural Networks for Visual Recognition](http://cs231n.github.io) - another class more focused on convnets
