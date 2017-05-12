@@ -23,6 +23,11 @@ watching the lectures and working on the problem sets.
 - A [post](http://colah.github.io/posts/2015-08-Understanding-LSTMs/) explaining LSTMs.
 - A pair of posts on [seq2seq](https://indico.io/blog/sequence-modeling-neuralnets-part1/)
   and [attention](https://indico.io/blog/sequence-modeling-neuralnets-part1/).
+- A [post](http://karpathy.github.io/2016/05/31/rl/) giving general background on RL and diving into score function gradient estimators.
+
+## Books
+
+- [The Deep Learning Book](http://www.deeplearningbook.org/).
 
 ## Software
 
